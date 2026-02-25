@@ -8,11 +8,14 @@ import {
   DEFAULT_IDENTITY_FILENAME,
   DEFAULT_MEMORY_ALT_FILENAME,
   DEFAULT_MEMORY_FILENAME,
+  DEFAULT_SOUL_FILENAME,
   DEFAULT_TOOLS_FILENAME,
   DEFAULT_USER_FILENAME,
   ensureAgentWorkspace,
+  filterBootstrapFilesForSession,
   loadWorkspaceBootstrapFiles,
   resolveDefaultAgentWorkspaceDir,
+  type WorkspaceBootstrapFile,
 } from "./workspace.js";
 
 describe("resolveDefaultAgentWorkspaceDir", () => {
@@ -99,6 +102,50 @@ describe("ensureAgentWorkspace", () => {
     const state = await readOnboardingState(tempDir);
     expect(state.bootstrapSeededAt).toBeUndefined();
     expect(state.onboardingCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
+  });
+});
+
+describe("filterBootstrapFilesForSession", () => {
+  const makeFiles = (...names: string[]): WorkspaceBootstrapFile[] =>
+    names.map((name) => ({ name, path: `/ws/${name}`, content: name, missing: false }));
+
+  const allFiles = makeFiles(
+    DEFAULT_AGENTS_FILENAME,
+    DEFAULT_SOUL_FILENAME,
+    DEFAULT_TOOLS_FILENAME,
+    DEFAULT_IDENTITY_FILENAME,
+    DEFAULT_USER_FILENAME,
+    DEFAULT_BOOTSTRAP_FILENAME,
+  );
+
+  it("returns all files for regular sessions", () => {
+    const result = filterBootstrapFilesForSession(allFiles, "agent:main:main");
+    expect(result.map((f) => f.name).toSorted()).toEqual(allFiles.map((f) => f.name).toSorted());
+  });
+
+  it("returns all files when sessionKey is undefined", () => {
+    const result = filterBootstrapFilesForSession(allFiles, undefined);
+    expect(result).toHaveLength(allFiles.length);
+  });
+
+  it("includes identity files for subagent sessions", () => {
+    const result = filterBootstrapFilesForSession(allFiles, "agent:luna:subagent:abc-123");
+    const names = result.map((f) => f.name);
+    expect(names).toContain(DEFAULT_SOUL_FILENAME);
+    expect(names).toContain(DEFAULT_IDENTITY_FILENAME);
+    expect(names).toContain(DEFAULT_USER_FILENAME);
+    expect(names).toContain(DEFAULT_AGENTS_FILENAME);
+    expect(names).toContain(DEFAULT_TOOLS_FILENAME);
+  });
+
+  it("excludes BOOTSTRAP.md for subagent sessions", () => {
+    const result = filterBootstrapFilesForSession(allFiles, "agent:luna:subagent:abc-123");
+    expect(result.map((f) => f.name)).not.toContain(DEFAULT_BOOTSTRAP_FILENAME);
+  });
+
+  it("returns only AGENTS.md and TOOLS.md for cron sessions", () => {
+    const result = filterBootstrapFilesForSession(allFiles, "agent:main:cron:job-id");
+    expect(result.map((f) => f.name).toSorted()).toEqual(["AGENTS.md", "TOOLS.md"]);
   });
 });
 

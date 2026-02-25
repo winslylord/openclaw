@@ -1,0 +1,32 @@
+// Standalone config: main agent + Cursor sub-agent. Use for testing:
+//   OPENCLAW_CONFIG_PATH=/Users/mac/Desktop/openclaw/openclaw/config-examples/cursor-subagent-full.json5 openclaw gateway run
+//
+// Add your channels (e.g. channels.whatsapp) and other settings in your real config; this is minimal for sub-agent testing.
+
+{
+  agents: {
+    defaults: {
+      workspace: "~/.openclaw/workspace",
+    },
+    list: [
+      {
+        id: "main",
+        default: true,
+        name: "Main",
+        workspace: "~/.openclaw/workspace",
+        subagents: { allowAgents: ["cursor"] },
+      },
+      {
+        id: "cursor",
+        name: "Cursor CLI Agent",
+        workspace: "~/.openclaw/workspace-cursor",
+        model: "cursor-cli/default",
+        identity: {
+          name: "Cursor",
+          emoji: "⌨️",
+          theme: "IDE agent via Cursor CLI",
+        },
+      },
+    ],
+  },
+}

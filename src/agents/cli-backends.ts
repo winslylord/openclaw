@@ -94,6 +94,25 @@ const DEFAULT_CODEX_BACKEND: CliBackendConfig = {
   serialize: true,
 };
 
+/** Cursor CLI as agent backend (cursor agent -p --output-format json). Requires Cursor subscription and cursor on PATH. */
+const DEFAULT_CURSOR_BACKEND: CliBackendConfig = {
+  command: "cursor",
+  args: ["agent", "-p", "--output-format", "json"],
+  resumeArgs: ["agent", "-p", "--output-format", "json", "--resume", "{sessionId}"],
+  output: "json",
+  input: "arg",
+  modelArg: "--model",
+  sessionIdFields: ["session_id", "sessionId", "conversation_id", "conversationId"],
+  sessionMode: "existing",
+  reliability: {
+    watchdog: {
+      fresh: { ...CLI_FRESH_WATCHDOG_DEFAULTS },
+      resume: { ...CLI_RESUME_WATCHDOG_DEFAULTS },
+    },
+  },
+  serialize: true,
+};
+
 function normalizeBackendKey(key: string): string {
   return normalizeProviderId(key);
 }
@@ -151,6 +170,7 @@ export function resolveCliBackendIds(cfg?: OpenClawConfig): Set<string> {
   const ids = new Set<string>([
     normalizeBackendKey("claude-cli"),
     normalizeBackendKey("codex-cli"),
+    normalizeBackendKey("cursor-cli"),
   ]);
   const configured = cfg?.agents?.defaults?.cliBackends ?? {};
   for (const key of Object.keys(configured)) {
@@ -177,6 +197,14 @@ export function resolveCliBackendConfig(
   }
   if (normalized === "codex-cli") {
     const merged = mergeBackendConfig(DEFAULT_CODEX_BACKEND, override);
+    const command = merged.command?.trim();
+    if (!command) {
+      return null;
+    }
+    return { id: normalized, config: { ...merged, command } };
+  }
+  if (normalized === "cursor-cli") {
+    const merged = mergeBackendConfig(DEFAULT_CURSOR_BACKEND, override);
     const command = merged.command?.trim();
     if (!command) {
       return null;

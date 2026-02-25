@@ -1,0 +1,19 @@
+// 复制到 ~/.openclaw/openclaw.json 使用（或设置 OPENCLAW_CONFIG_PATH 指向本文件）。
+// 这样主 agent 会出现在 agents 列表，且能通过 sessions_spawn 拉起 cursor sub-agent。
+//
+// 使用前请把下面 $include 的路径改成你本机 openclaw 仓库的 config-examples 绝对路径。
+
+{
+  $include: "/Users/mac/Desktop/openclaw/openclaw/config-examples/cursor-subagent.json5",
+  agents: {
+    list: [
+      {
+        id: "main",
+        default: true,
+        name: "Main",
+        workspace: "~/.openclaw/workspace",
+        subagents: { allowAgents: ["cursor"] },
+      },
+    ],
+  },
+}

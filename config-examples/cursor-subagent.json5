@@ -1,0 +1,34 @@
+// Cursor CLI as sub-agent — 仅作为 fragment 使用，不要单独作为 OPENCLAW_CONFIG_PATH。
+//
+// 正确用法：
+// 1) 在主配置里 $include 本文件，并确保主 agent 有 subagents.allowAgents: ["cursor"]。
+//    示例：复制 config-examples/openclaw-with-cursor-subagent.json5 到 ~/.openclaw/openclaw.json。
+// 2) 或使用完整配置：OPENCLAW_CONFIG_PATH=.../config-examples/cursor-subagent-full.json5
+//
+// 若单独用本文件作为配置，agents.list 只有 cursor，没有 main，检查/agents_list 会异常。
+// Prerequisites: Cursor 已安装且 `cursor` 在 PATH；见 https://cursor.com/docs/cli/overview
+
+{
+  agents: {
+    defaults: {
+      // Optional: override Cursor CLI path if not on PATH
+      // cliBackends: {
+      //   "cursor-cli": { command: "/Applications/Cursor.app/Contents/MacOS/cursor" },
+      // },
+    },
+    list: [
+      {
+        id: "cursor",
+        name: "Cursor CLI Agent",
+        workspace: "~/.openclaw/workspace-cursor",
+        model: "cursor-cli/default",
+        identity: {
+          name: "Cursor",
+          emoji: "⌨️",
+          theme: "IDE agent via Cursor CLI",
+        },
+        // This agent runs as CLI backend only; no subagents needed
+      },
+    ],
+  },
+}

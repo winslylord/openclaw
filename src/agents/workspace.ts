@@ -494,16 +494,25 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
   return result;
 }
 
-const MINIMAL_BOOTSTRAP_ALLOWLIST = new Set([DEFAULT_AGENTS_FILENAME, DEFAULT_TOOLS_FILENAME]);
+const CRON_BOOTSTRAP_ALLOWLIST = new Set([DEFAULT_AGENTS_FILENAME, DEFAULT_TOOLS_FILENAME]);
+// Subagents get full identity files; only BOOTSTRAP.md is excluded since onboarding
+// prompts are irrelevant in a subagent context.
+const SUBAGENT_BOOTSTRAP_BLOCKLIST = new Set([DEFAULT_BOOTSTRAP_FILENAME]);
 
 export function filterBootstrapFilesForSession(
   files: WorkspaceBootstrapFile[],
   sessionKey?: string,
 ): WorkspaceBootstrapFile[] {
-  if (!sessionKey || (!isSubagentSessionKey(sessionKey) && !isCronSessionKey(sessionKey))) {
+  if (!sessionKey) {
     return files;
   }
-  return files.filter((file) => MINIMAL_BOOTSTRAP_ALLOWLIST.has(file.name));
+  if (isCronSessionKey(sessionKey)) {
+    return files.filter((file) => CRON_BOOTSTRAP_ALLOWLIST.has(file.name));
+  }
+  if (isSubagentSessionKey(sessionKey)) {
+    return files.filter((file) => !SUBAGENT_BOOTSTRAP_BLOCKLIST.has(file.name));
+  }
+  return files;
 }
 
 export async function loadExtraBootstrapFiles(

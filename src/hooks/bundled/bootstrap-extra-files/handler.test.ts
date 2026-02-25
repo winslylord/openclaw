@@ -73,11 +73,11 @@ describe("bootstrap-extra-files hook", () => {
     );
   });
 
-  it("re-applies subagent bootstrap allowlist after extras are added", async () => {
+  it("re-applies subagent bootstrap filter after extras are added", async () => {
     const tempDir = await makeTempWorkspace("openclaw-bootstrap-extra-subagent-");
     const extraDir = path.join(tempDir, "packages", "persona");
     await fs.mkdir(extraDir, { recursive: true });
-    await fs.writeFile(path.join(extraDir, "SOUL.md"), "evil", "utf-8");
+    await fs.writeFile(path.join(extraDir, "SOUL.md"), "extra soul", "utf-8");
 
     const cfg = createBootstrapExtraConfig(["packages/*/SOUL.md"]);
     const context = await createBootstrapContext({
@@ -93,6 +93,37 @@ describe("bootstrap-extra-files hook", () => {
     const event = createHookEvent("agent", "bootstrap", "agent:main:subagent:abc", context);
     await handler(event);
 
-    expect(context.bootstrapFiles.map((f) => f.name).toSorted()).toEqual(["AGENTS.md", "TOOLS.md"]);
+    // Subagent sessions include identity files (SOUL.md, etc.) but exclude BOOTSTRAP.md
+    expect(context.bootstrapFiles.map((f) => f.name).toSorted()).toEqual([
+      "AGENTS.md",
+      "SOUL.md",
+      "TOOLS.md",
+    ]);
+  });
+
+  it("excludes BOOTSTRAP.md for subagent sessions", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-bootstrap-extra-subagent-boot-");
+    const extraDir = path.join(tempDir, "packages", "onboard");
+    await fs.mkdir(extraDir, { recursive: true });
+    await fs.writeFile(path.join(extraDir, "BOOTSTRAP.md"), "onboarding", "utf-8");
+
+    const cfg = createBootstrapExtraConfig(["packages/*/BOOTSTRAP.md"]);
+    const context = await createBootstrapContext({
+      workspaceDir: tempDir,
+      cfg,
+      sessionKey: "agent:main:subagent:xyz",
+      rootFiles: [
+        { name: "AGENTS.md", content: "root agents" },
+        { name: "IDENTITY.md", content: "root identity" },
+      ],
+    });
+
+    const event = createHookEvent("agent", "bootstrap", "agent:main:subagent:xyz", context);
+    await handler(event);
+
+    expect(context.bootstrapFiles.map((f) => f.name).toSorted()).toEqual([
+      "AGENTS.md",
+      "IDENTITY.md",
+    ]);
   });
 });
