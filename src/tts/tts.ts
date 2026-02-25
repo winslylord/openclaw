@@ -64,10 +64,9 @@ const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
   speed: 1.0,
 };
 
-const TELEGRAM_OUTPUT = {
+// Channels that support native voice playback prefer opus.
+const VOICE_CHANNEL_OUTPUT = {
   openai: "opus" as const,
-  // ElevenLabs output formats use codec_sample_rate_bitrate naming.
-  // Opus @ 48kHz/64kbps is a good voice-note tradeoff for Telegram.
   elevenlabs: "opus_48000_64",
   extension: ".opus",
   voiceCompatible: true,
@@ -480,9 +479,11 @@ export function setLastTtsAttempt(entry: TtsStatusEntry | undefined): void {
   lastTtsAttempt = entry;
 }
 
+const VOICE_NATIVE_CHANNELS = new Set(["telegram", "feishu"]);
+
 function resolveOutputFormat(channelId?: string | null) {
-  if (channelId === "telegram") {
-    return TELEGRAM_OUTPUT;
+  if (channelId && VOICE_NATIVE_CHANNELS.has(channelId)) {
+    return VOICE_CHANNEL_OUTPUT;
   }
   return DEFAULT_OUTPUT;
 }
@@ -491,7 +492,18 @@ function resolveChannelId(channel: string | undefined): ChannelId | null {
   return channel ? normalizeChannelId(channel) : null;
 }
 
-function resolveEdgeOutputFormat(config: ResolvedTtsConfig): string {
+// Edge TTS format that produces opus audio in an ogg container.
+const EDGE_OPUS_FORMAT = "ogg-24khz-16bit-mono-opus";
+
+function resolveEdgeOutputFormat(config: ResolvedTtsConfig, channelId?: string | null): string {
+  // If user explicitly configured an output format, respect it.
+  if (config.edge.outputFormatConfigured) {
+    return config.edge.outputFormat;
+  }
+  // Voice-native channels need opus; Edge TTS supports it via ogg-opus.
+  if (channelId && VOICE_NATIVE_CHANNELS.has(channelId)) {
+    return EDGE_OPUS_FORMAT;
+  }
   return config.edge.outputFormat;
 }
 
@@ -567,7 +579,7 @@ export async function textToSpeech(params: {
         const tempRoot = resolvePreferredOpenClawTmpDir();
         mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
         const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
-        let edgeOutputFormat = resolveEdgeOutputFormat(config);
+        let edgeOutputFormat = resolveEdgeOutputFormat(config, channelId);
         const fallbackEdgeOutputFormat =
           edgeOutputFormat !== DEFAULT_EDGE_OUTPUT_FORMAT ? DEFAULT_EDGE_OUTPUT_FORMAT : undefined;
 
