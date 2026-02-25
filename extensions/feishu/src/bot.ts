@@ -31,6 +31,7 @@ import {
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, sendMessageFeishu } from "./send.js";
+import { isFeishuGroupChatId } from "./targets.js";
 import type { FeishuMessageContext, FeishuMediaInfo, ResolvedFeishuAccount } from "./types.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
 
@@ -716,11 +717,21 @@ export async function handleFeishuMessage(params: {
     const feishuFrom = `feishu:${ctx.senderOpenId}`;
     const feishuTo = isGroup ? `chat:${ctx.chatId}` : `user:${ctx.senderOpenId}`;
 
-    // Resolve peer ID for session routing
-    // When topicSessionMode is enabled, messages within a topic (identified by root_id)
-    // get a separate session from the main group chat.
-    let peerId = isGroup ? ctx.chatId : ctx.senderOpenId;
-    if (isGroup && ctx.rootId) {
+    // Resolve peer ID for session routing.
+    // Use chat_id as key for group chats so different groups get separate conversation context.
+    // Treat as group when chat_type is "group" OR when chat_id looks like a group id (oc_),
+    // so we never key sessions by user_id for group conversations.
+    // Also treat all DM sessions as unique per user (using senderOpenId) even if they look like chatIds.
+    const sessionIsGroup = isGroup || (isFeishuGroupChatId(ctx.chatId) && ctx.chatType !== "p2p");
+
+    if (!isGroup && sessionIsGroup) {
+      log(
+        `feishu[${account.accountId}]: treating chat as group by chat_id (oc_), session key will use ${ctx.chatId}`,
+      );
+    }
+
+    let peerId = sessionIsGroup ? ctx.chatId : ctx.senderOpenId;
+    if (sessionIsGroup && ctx.rootId) {
       const groupConfig = resolveFeishuGroupConfig({ cfg: feishuCfg, groupId: ctx.chatId });
       const topicSessionMode =
         groupConfig?.topicSessionMode ?? feishuCfg?.topicSessionMode ?? "disabled";
@@ -736,7 +747,7 @@ export async function handleFeishuMessage(params: {
       channel: "feishu",
       accountId: account.accountId,
       peer: {
-        kind: isGroup ? "group" : "direct",
+        kind: sessionIsGroup ? "group" : "direct",
         id: peerId,
       },
     });
@@ -792,9 +803,10 @@ export async function handleFeishuMessage(params: {
       log,
       accountId: account.accountId,
     });
-    const mediaPayload = buildAgentMediaPayload(mediaList);
 
-    // Fetch quoted/replied message content if parentId exists
+    // Fetch quoted/replied message content if parentId exists.
+    // When the quoted message is media (image, file, etc.), download its content
+    // so the LLM can actually see the image rather than just getting an opaque ID.
     let quotedContent: string | undefined;
     if (ctx.parentId) {
       try {
@@ -804,15 +816,41 @@ export async function handleFeishuMessage(params: {
           accountId: account.accountId,
         });
         if (quotedMsg) {
-          quotedContent = quotedMsg.content;
+          const quotedMediaTypes = ["image", "file", "audio", "video", "sticker", "post"];
+          if (quotedMediaTypes.includes(quotedMsg.contentType)) {
+            log(
+              `feishu[${account.accountId}]: quoted message is ${quotedMsg.contentType}, downloading media`,
+            );
+            const quotedMedia = await resolveFeishuMediaList({
+              cfg,
+              messageId: quotedMsg.messageId,
+              messageType: quotedMsg.contentType,
+              content: quotedMsg.content,
+              maxBytes: mediaMaxBytes,
+              log,
+              accountId: account.accountId,
+            });
+            if (quotedMedia.length > 0) {
+              mediaList.push(...quotedMedia);
+              log(
+                `feishu[${account.accountId}]: resolved ${quotedMedia.length} media item(s) from quoted message`,
+              );
+            }
+            // For media quotes, use a descriptive placeholder instead of raw JSON
+            quotedContent = `[Quoted ${quotedMsg.contentType}]`;
+          } else {
+            quotedContent = quotedMsg.content;
+          }
           log(
-            `feishu[${account.accountId}]: fetched quoted message: ${quotedContent?.slice(0, 100)}`,
+            `feishu[${account.accountId}]: fetched quoted message (${quotedMsg.contentType}): ${quotedContent?.slice(0, 100)}`,
           );
         }
       } catch (err) {
         log(`feishu[${account.accountId}]: failed to fetch quoted message: ${String(err)}`);
       }
     }
+
+    const mediaPayload = buildAgentMediaPayload(mediaList);
 
     const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
 
@@ -905,7 +943,7 @@ export async function handleFeishuMessage(params: {
     });
 
     let combinedBody = body;
-    const historyKey = isGroup ? ctx.chatId : undefined;
+    const historyKey = sessionIsGroup ? ctx.chatId : undefined;
 
     if (isGroup && historyKey && chatHistories) {
       combinedBody = buildPendingHistoryContextFromMap({

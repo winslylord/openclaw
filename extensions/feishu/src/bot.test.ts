@@ -335,6 +335,68 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
+  it("downloads image from quoted message and includes it in media payload", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockGetMessageFeishu.mockResolvedValueOnce({
+      messageId: "msg-quoted-image",
+      chatId: "oc-dm",
+      content: JSON.stringify({ image_key: "img_quoted_key" }),
+      contentType: "image",
+    });
+    mockDownloadMessageResourceFeishu.mockResolvedValueOnce({
+      buffer: Buffer.from("quoted-image-data"),
+      contentType: "image/png",
+    });
+    mockSaveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/inbound-quoted.png",
+      contentType: "image/png",
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-sender",
+        },
+      },
+      message: {
+        message_id: "msg-reply-to-image",
+        parent_id: "msg-quoted-image",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "What is in this image?" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockGetMessageFeishu).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: "msg-quoted-image" }),
+    );
+    expect(mockDownloadMessageResourceFeishu).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "msg-quoted-image",
+        fileKey: "img_quoted_key",
+        type: "image",
+      }),
+    );
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        MediaPath: "/tmp/inbound-quoted.png",
+        MediaType: "image/png",
+        ReplyToBody: "[Quoted image]",
+      }),
+    );
+  });
+
   it("uses video file_key (not thumbnail image_key) for inbound video download", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 

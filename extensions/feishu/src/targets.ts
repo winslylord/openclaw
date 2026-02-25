@@ -4,6 +4,16 @@ const CHAT_ID_PREFIX = "oc_";
 const OPEN_ID_PREFIX = "ou_";
 const USER_ID_REGEX = /^[a-zA-Z0-9_-]+$/;
 
+/**
+ * Returns true when the given id looks like a Feishu group chat_id (e.g. oc_xxx).
+ * Used to scope session and context by chat so different groups get separate conversations
+ * even if chat_type is missing or wrong.
+ */
+export function isFeishuGroupChatId(id: string): boolean {
+  const trimmed = (id ?? "").trim();
+  return trimmed.toLowerCase().startsWith(CHAT_ID_PREFIX);
+}
+
 export function detectIdType(id: string): FeishuIdType | null {
   const trimmed = id.trim();
   if (trimmed.startsWith(CHAT_ID_PREFIX)) {
