@@ -94,14 +94,45 @@ const DEFAULT_CODEX_BACKEND: CliBackendConfig = {
   serialize: true,
 };
 
-/** Cursor CLI as agent backend (cursor agent -p --output-format json). Requires Cursor subscription and cursor on PATH. */
+const CURSOR_MODEL_ALIASES: Record<string, string> = {
+  opus: "opus-4.6-thinking",
+  "opus-4.6": "opus-4.6",
+  "opus-thinking": "opus-4.6-thinking",
+  "opus-4.6-thinking": "opus-4.6-thinking",
+  "opus-4.5": "opus-4.5",
+  "opus-4.5-thinking": "opus-4.5-thinking",
+  sonnet: "sonnet-4.6-thinking",
+  "sonnet-4.6": "sonnet-4.6",
+  "sonnet-4.6-thinking": "sonnet-4.6-thinking",
+  "sonnet-4.5": "sonnet-4.5",
+  "sonnet-4.5-thinking": "sonnet-4.5-thinking",
+  auto: "auto",
+};
+
+/**
+ * Cursor CLI agent backend. Uses the standalone `agent` binary
+ * (installed via `curl https://cursor.com/install | bash`).
+ * --force: auto-approve tool/command execution (non-interactive).
+ * --trust: trust the workspace without prompting (headless only).
+ * --approve-mcps: auto-approve MCP server connections.
+ */
 const DEFAULT_CURSOR_BACKEND: CliBackendConfig = {
-  command: "cursor",
-  args: ["agent", "-p", "--output-format", "json"],
-  resumeArgs: ["agent", "-p", "--output-format", "json", "--resume", "{sessionId}"],
+  command: "agent",
+  args: ["-p", "--output-format", "json", "--force", "--trust", "--approve-mcps"],
+  resumeArgs: [
+    "-p",
+    "--output-format",
+    "json",
+    "--force",
+    "--trust",
+    "--approve-mcps",
+    "--resume",
+    "{sessionId}",
+  ],
   output: "json",
   input: "arg",
   modelArg: "--model",
+  modelAliases: CURSOR_MODEL_ALIASES,
   sessionIdFields: ["session_id", "sessionId", "conversation_id", "conversationId"],
   sessionMode: "existing",
   reliability: {
