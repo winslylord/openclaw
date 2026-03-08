@@ -4,6 +4,7 @@ import {
   HUGGINGFACE_MODEL_CATALOG,
 } from "../agents/huggingface-models.js";
 import {
+  buildKilocodeProvider,
   buildKimiCodingProvider,
   buildQianfanProvider,
   buildXiaomiProvider,
@@ -60,12 +61,10 @@ import {
   applyProviderConfigWithModelCatalog,
 } from "./onboard-auth.config-shared.js";
 import {
-  buildKilocodeModelDefinition,
   buildMistralModelDefinition,
   buildZaiModelDefinition,
   buildMoonshotModelDefinition,
   buildXaiModelDefinition,
-  KILOCODE_DEFAULT_MODEL_ID,
   MISTRAL_BASE_URL,
   MISTRAL_DEFAULT_MODEL_ID,
   QIANFAN_BASE_URL,
@@ -240,7 +239,7 @@ export function applySyntheticProviderConfig(cfg: OpenClawConfig): OpenClawConfi
   const models = { ...cfg.agents?.defaults?.models };
   models[SYNTHETIC_DEFAULT_MODEL_REF] = {
     ...models[SYNTHETIC_DEFAULT_MODEL_REF],
-    alias: models[SYNTHETIC_DEFAULT_MODEL_REF]?.alias ?? "MiniMax M2.1",
+    alias: models[SYNTHETIC_DEFAULT_MODEL_REF]?.alias ?? "MiniMax M2.5",
   };
 
   const providers = { ...cfg.models?.providers };
@@ -306,7 +305,7 @@ export function applyVeniceProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
   const models = { ...cfg.agents?.defaults?.models };
   models[VENICE_DEFAULT_MODEL_REF] = {
     ...models[VENICE_DEFAULT_MODEL_REF],
-    alias: models[VENICE_DEFAULT_MODEL_REF]?.alias ?? "Llama 3.3 70B",
+    alias: models[VENICE_DEFAULT_MODEL_REF]?.alias ?? "Kimi K2.5",
   };
 
   const veniceModels = VENICE_MODEL_CATALOG.map(buildVeniceModelDefinition);
@@ -447,15 +446,14 @@ export function applyKilocodeProviderConfig(cfg: OpenClawConfig): OpenClawConfig
     alias: models[KILOCODE_DEFAULT_MODEL_REF]?.alias ?? "Kilo Gateway",
   };
 
-  const defaultModel = buildKilocodeModelDefinition();
+  const kilocodeModels = buildKilocodeProvider().models ?? [];
 
-  return applyProviderConfigWithDefaultModel(cfg, {
+  return applyProviderConfigWithModelCatalog(cfg, {
     agentModels: models,
     providerId: "kilocode",
     api: "openai-completions",
     baseUrl: KILOCODE_BASE_URL,
-    defaultModel,
-    defaultModelId: KILOCODE_DEFAULT_MODEL_ID,
+    catalogModels: kilocodeModels,
   });
 }
 

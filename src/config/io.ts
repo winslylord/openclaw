@@ -13,9 +13,10 @@ import {
   shouldDeferShellEnvFallback,
   shouldEnableShellEnvFallback,
 } from "../infra/shell-env.js";
+import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { VERSION } from "../version.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
-import { rotateConfigBackups } from "./backup-rotation.js";
+import { maintainConfigBackups } from "./backup-rotation.js";
 import {
   applyCompactionDefaults,
   applyContextPruningDefaults,
@@ -24,16 +25,22 @@ import {
   applyMessageDefaults,
   applyModelDefaults,
   applySessionDefaults,
+  applyTalkConfigNormalization,
   applyTalkApiKey,
 } from "./defaults.js";
 import { restoreEnvVarRefs } from "./env-preserve.js";
 import {
+  type EnvSubstitutionWarning,
   MissingEnvVarError,
   containsEnvVarReference,
   resolveConfigEnvVars,
 } from "./env-substitution.js";
 import { applyConfigEnvVars } from "./env-vars.js";
-import { ConfigIncludeError, resolveConfigIncludes } from "./includes.js";
+import {
+  ConfigIncludeError,
+  readConfigIncludeFileWithGuards,
+  resolveConfigIncludes,
+} from "./includes.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import { applyMergePatch } from "./merge-patch.js";
 import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
@@ -71,6 +78,9 @@ const SHELL_ENV_EXPECTED_KEYS = [
   "OPENCLAW_GATEWAY_TOKEN",
   "OPENCLAW_GATEWAY_PASSWORD",
 ];
+
+const OPEN_DM_POLICY_ALLOW_FROM_RE =
+  /^(?<policyPath>[a-z0-9_.-]+)\s*=\s*"open"\s+requires\s+(?<allowPath>[a-z0-9_.-]+)(?:\s+\(or\s+[a-z0-9_.-]+\))?\s+to include "\*"$/i;
 
 const CONFIG_AUDIT_LOG_FILENAME = "config-audit.jsonl";
 const loggedInvalidConfigs = new Set<string>();
@@ -135,6 +145,27 @@ function hashConfigRaw(raw: string | null): string {
     .createHash("sha256")
     .update(raw ?? "")
     .digest("hex");
+}
+
+function formatConfigValidationFailure(pathLabel: string, issueMessage: string): string {
+  const match = issueMessage.match(OPEN_DM_POLICY_ALLOW_FROM_RE);
+  const policyPath = match?.groups?.policyPath?.trim();
+  const allowPath = match?.groups?.allowPath?.trim();
+  if (!policyPath || !allowPath) {
+    return `Config validation failed: ${pathLabel}: ${issueMessage}`;
+  }
+
+  return [
+    `Config validation failed: ${pathLabel}`,
+    "",
+    `Configuration mismatch: ${policyPath} is "open", but ${allowPath} does not include "*".`,
+    "",
+    "Fix with:",
+    `  openclaw config set ${allowPath} '["*"]'`,
+    "",
+    "Or switch policy:",
+    `  openclaw config set ${policyPath} "pairing"`,
+  ].join("\n");
 }
 
 function isNumericPathSegment(raw: string): boolean {
@@ -600,6 +631,7 @@ export function parseConfigJson5(
 type ConfigReadResolution = {
   resolvedConfigRaw: unknown;
   envSnapshotForRestore: Record<string, string | undefined>;
+  envWarnings: EnvSubstitutionWarning[];
 };
 
 function resolveConfigIncludesForRead(
@@ -609,6 +641,13 @@ function resolveConfigIncludesForRead(
 ): unknown {
   return resolveConfigIncludes(parsed, configPath, {
     readFile: (candidate) => deps.fs.readFileSync(candidate, "utf-8"),
+    readFileWithGuards: ({ includePath, resolvedPath, rootRealDir }) =>
+      readConfigIncludeFileWithGuards({
+        includePath,
+        resolvedPath,
+        rootRealDir,
+        ioFs: deps.fs,
+      }),
     parseJson: (raw) => deps.json5.parse(raw),
   });
 }
@@ -622,10 +661,16 @@ function resolveConfigForRead(
     applyConfigEnvVars(resolvedIncludes as OpenClawConfig, env);
   }
 
+  // Collect missing env var references as warnings instead of throwing,
+  // so non-critical config sections with unset vars don't crash the gateway.
+  const envWarnings: EnvSubstitutionWarning[] = [];
   return {
-    resolvedConfigRaw: resolveConfigEnvVars(resolvedIncludes, env),
+    resolvedConfigRaw: resolveConfigEnvVars(resolvedIncludes, env, {
+      onMissing: (w) => envWarnings.push(w),
+    }),
     // Capture env snapshot after substitution for write-time ${VAR} restoration.
     envSnapshotForRestore: { ...env } as Record<string, string | undefined>,
+    envWarnings,
   };
 }
 
@@ -660,10 +705,16 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
       const raw = deps.fs.readFileSync(configPath, "utf-8");
       const parsed = deps.json5.parse(raw);
-      const { resolvedConfigRaw: resolvedConfig } = resolveConfigForRead(
+      const readResolution = resolveConfigForRead(
         resolveConfigIncludesForRead(parsed, configPath, deps),
         deps.env,
       );
+      const resolvedConfig = readResolution.resolvedConfigRaw;
+      for (const w of readResolution.envWarnings) {
+        deps.logger.warn(
+          `Config (${configPath}): missing env var "${w.varName}" at ${w.configPath} — feature using this value will be unavailable`,
+        );
+      }
       warnOnConfigMiskeys(resolvedConfig, deps.logger);
       if (typeof resolvedConfig !== "object" || resolvedConfig === null) {
         return {};
@@ -678,29 +729,37 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       const validated = validateConfigObjectWithPlugins(resolvedConfig);
       if (!validated.ok) {
         const details = validated.issues
-          .map((iss) => `- ${iss.path || "<root>"}: ${iss.message}`)
+          .map(
+            (iss) =>
+              `- ${sanitizeTerminalText(iss.path || "<root>")}: ${sanitizeTerminalText(iss.message)}`,
+          )
           .join("\n");
         if (!loggedInvalidConfigs.has(configPath)) {
           loggedInvalidConfigs.add(configPath);
           deps.logger.error(`Invalid config at ${configPath}:\\n${details}`);
         }
-        const error = new Error("Invalid config");
+        const error = new Error(`Invalid config at ${configPath}:\n${details}`);
         (error as { code?: string; details?: string }).code = "INVALID_CONFIG";
         (error as { code?: string; details?: string }).details = details;
         throw error;
       }
       if (validated.warnings.length > 0) {
         const details = validated.warnings
-          .map((iss) => `- ${iss.path || "<root>"}: ${iss.message}`)
+          .map(
+            (iss) =>
+              `- ${sanitizeTerminalText(iss.path || "<root>")}: ${sanitizeTerminalText(iss.message)}`,
+          )
           .join("\n");
         deps.logger.warn(`Config warnings:\\n${details}`);
       }
       warnIfConfigFromFuture(validated.config, deps.logger);
-      const cfg = applyModelDefaults(
-        applyCompactionDefaults(
-          applyContextPruningDefaults(
-            applyAgentDefaults(
-              applySessionDefaults(applyLoggingDefaults(applyMessageDefaults(validated.config))),
+      const cfg = applyTalkConfigNormalization(
+        applyModelDefaults(
+          applyCompactionDefaults(
+            applyContextPruningDefaults(
+              applyAgentDefaults(
+                applySessionDefaults(applyLoggingDefaults(applyMessageDefaults(validated.config))),
+              ),
             ),
           ),
         ),
@@ -772,10 +831,11 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
       const error = err as { code?: string };
       if (error?.code === "INVALID_CONFIG") {
-        return {};
+        // Fail closed so invalid configs cannot silently fall back to permissive defaults.
+        throw err;
       }
       deps.logger.error(`Failed to read config at ${configPath}`, err);
-      return {};
+      throw err;
     }
   }
 
@@ -785,10 +845,12 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     if (!exists) {
       const hash = hashConfigRaw(null);
       const config = applyTalkApiKey(
-        applyModelDefaults(
-          applyCompactionDefaults(
-            applyContextPruningDefaults(
-              applyAgentDefaults(applySessionDefaults(applyMessageDefaults({}))),
+        applyTalkConfigNormalization(
+          applyModelDefaults(
+            applyCompactionDefaults(
+              applyContextPruningDefaults(
+                applyAgentDefaults(applySessionDefaults(applyMessageDefaults({}))),
+              ),
             ),
           ),
         ),
@@ -859,33 +921,20 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         };
       }
 
-      let readResolution: ConfigReadResolution;
-      try {
-        readResolution = resolveConfigForRead(resolved, deps.env);
-      } catch (err) {
-        const message =
-          err instanceof MissingEnvVarError
-            ? err.message
-            : `Env var substitution failed: ${String(err)}`;
-        return {
-          snapshot: {
-            path: configPath,
-            exists: true,
-            raw,
-            parsed: parsedRes.parsed,
-            resolved: coerceConfig(resolved),
-            valid: false,
-            config: coerceConfig(resolved),
-            hash,
-            issues: [{ path: "", message }],
-            warnings: [],
-            legacyIssues: [],
-          },
-        };
-      }
+      const readResolution = resolveConfigForRead(resolved, deps.env);
+
+      // Convert missing env var references to config warnings instead of fatal errors.
+      // This allows the gateway to start in degraded mode when non-critical config
+      // sections reference unset env vars (e.g. optional provider API keys).
+      const envVarWarnings = readResolution.envWarnings.map((w) => ({
+        path: w.configPath,
+        message: `Missing env var "${w.varName}" — feature using this value will be unavailable`,
+      }));
 
       const resolvedConfigRaw = readResolution.resolvedConfigRaw;
-      const legacyIssues = findLegacyConfigIssues(resolvedConfigRaw);
+      // Detect legacy keys on resolved config, but only mark source-literal legacy
+      // entries (for auto-migration) when they are present in the parsed source.
+      const legacyIssues = findLegacyConfigIssues(resolvedConfigRaw, parsedRes.parsed);
 
       const validated = validateConfigObjectWithPlugins(resolvedConfigRaw);
       if (!validated.ok) {
@@ -900,7 +949,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
             config: coerceConfig(resolvedConfigRaw),
             hash,
             issues: validated.issues,
-            warnings: validated.warnings,
+            warnings: [...validated.warnings, ...envVarWarnings],
             legacyIssues,
           },
         };
@@ -909,9 +958,11 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       warnIfConfigFromFuture(validated.config, deps.logger);
       const snapshotConfig = normalizeConfigPaths(
         applyTalkApiKey(
-          applyModelDefaults(
-            applyAgentDefaults(
-              applySessionDefaults(applyLoggingDefaults(applyMessageDefaults(validated.config))),
+          applyTalkConfigNormalization(
+            applyModelDefaults(
+              applyAgentDefaults(
+                applySessionDefaults(applyLoggingDefaults(applyMessageDefaults(validated.config))),
+              ),
             ),
           ),
         ),
@@ -930,12 +981,31 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           config: snapshotConfig,
           hash,
           issues: [],
-          warnings: validated.warnings,
+          warnings: [...validated.warnings, ...envVarWarnings],
           legacyIssues,
         },
         envSnapshotForRestore: readResolution.envSnapshotForRestore,
       };
     } catch (err) {
+      const nodeErr = err as NodeJS.ErrnoException;
+      let message: string;
+      if (nodeErr?.code === "EACCES") {
+        // Permission denied — common in Docker/container deployments where the
+        // config file is owned by root but the gateway runs as a non-root user.
+        const uid = process.getuid?.();
+        const uidHint = typeof uid === "number" ? String(uid) : "$(id -u)";
+        message = [
+          `read failed: ${String(err)}`,
+          ``,
+          `Config file is not readable by the current process. If running in a container`,
+          `or 1-click deployment, fix ownership with:`,
+          `  chown ${uidHint} "${configPath}"`,
+          `Then restart the gateway.`,
+        ].join("\n");
+        deps.logger.error(message);
+      } else {
+        message = `read failed: ${String(err)}`;
+      }
       return {
         snapshot: {
           path: configPath,
@@ -946,7 +1016,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           valid: false,
           config: {},
           hash: hashConfigRaw(null),
-          issues: [{ path: "", message: `read failed: ${String(err)}` }],
+          issues: [{ path: "", message }],
           warnings: [],
           legacyIssues: [],
         },
@@ -982,6 +1052,13 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       try {
         const resolvedIncludes = resolveConfigIncludes(snapshot.parsed, configPath, {
           readFile: (candidate) => deps.fs.readFileSync(candidate, "utf-8"),
+          readFileWithGuards: ({ includePath, resolvedPath, rootRealDir }) =>
+            readConfigIncludeFileWithGuards({
+              includePath,
+              resolvedPath,
+              rootRealDir,
+              ioFs: deps.fs,
+            }),
           parseJson: (raw) => deps.json5.parse(raw),
         });
         const collected = new Map<string, string>();
@@ -1000,7 +1077,8 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     if (!validated.ok) {
       const issue = validated.issues[0];
       const pathLabel = issue?.path ? issue.path : "<root>";
-      throw new Error(`Config validation failed: ${pathLabel}: ${issue?.message ?? "invalid"}`);
+      const issueMessage = issue?.message ?? "invalid";
+      throw new Error(formatConfigValidationFailure(pathLabel, issueMessage));
     }
     if (validated.warnings.length > 0) {
       const details = validated.warnings
@@ -1170,10 +1248,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       });
 
       if (deps.fs.existsSync(configPath)) {
-        await rotateConfigBackups(configPath, deps.fs.promises);
-        await deps.fs.promises.copyFile(configPath, `${configPath}.bak`).catch(() => {
-          // best-effort
-        });
+        await maintainConfigBackups(configPath, deps.fs.promises);
       }
 
       try {
@@ -1229,6 +1304,8 @@ let configCache: {
   expiresAt: number;
   config: OpenClawConfig;
 } | null = null;
+let runtimeConfigSnapshot: OpenClawConfig | null = null;
+let runtimeConfigSourceSnapshot: OpenClawConfig | null = null;
 
 function resolveConfigCacheMs(env: NodeJS.ProcessEnv): number {
   const raw = env.OPENCLAW_CONFIG_CACHE_MS?.trim();
@@ -1256,7 +1333,33 @@ export function clearConfigCache(): void {
   configCache = null;
 }
 
+export function setRuntimeConfigSnapshot(
+  config: OpenClawConfig,
+  sourceConfig?: OpenClawConfig,
+): void {
+  runtimeConfigSnapshot = config;
+  runtimeConfigSourceSnapshot = sourceConfig ?? null;
+  clearConfigCache();
+}
+
+export function clearRuntimeConfigSnapshot(): void {
+  runtimeConfigSnapshot = null;
+  runtimeConfigSourceSnapshot = null;
+  clearConfigCache();
+}
+
+export function getRuntimeConfigSnapshot(): OpenClawConfig | null {
+  return runtimeConfigSnapshot;
+}
+
+export function getRuntimeConfigSourceSnapshot(): OpenClawConfig | null {
+  return runtimeConfigSourceSnapshot;
+}
+
 export function loadConfig(): OpenClawConfig {
+  if (runtimeConfigSnapshot) {
+    return runtimeConfigSnapshot;
+  }
   const io = createConfigIO();
   const configPath = io.configPath;
   const now = Date.now();
@@ -1280,6 +1383,11 @@ export function loadConfig(): OpenClawConfig {
   return config;
 }
 
+export async function readBestEffortConfig(): Promise<OpenClawConfig> {
+  const snapshot = await readConfigFileSnapshot();
+  return snapshot.valid ? loadConfig() : snapshot.config;
+}
+
 export async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {
   return await createConfigIO().readConfigFileSnapshot();
 }
@@ -1293,9 +1401,14 @@ export async function writeConfigFile(
   options: ConfigWriteOptions = {},
 ): Promise<void> {
   const io = createConfigIO();
+  let nextCfg = cfg;
+  if (runtimeConfigSnapshot && runtimeConfigSourceSnapshot) {
+    const runtimePatch = createMergePatch(runtimeConfigSnapshot, cfg);
+    nextCfg = coerceConfig(applyMergePatch(runtimeConfigSourceSnapshot, runtimePatch));
+  }
   const sameConfigPath =
     options.expectedConfigPath === undefined || options.expectedConfigPath === io.configPath;
-  await io.writeConfigFile(cfg, {
+  await io.writeConfigFile(nextCfg, {
     envSnapshotForRestore: sameConfigPath ? options.envSnapshotForRestore : undefined,
     unsetPaths: options.unsetPaths,
   });

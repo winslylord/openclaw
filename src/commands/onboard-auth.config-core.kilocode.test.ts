@@ -21,6 +21,7 @@ import {
 } from "./onboard-auth.models.js";
 
 const emptyCfg: OpenClawConfig = {};
+const KILOCODE_MODEL_IDS = ["kilo/auto"];
 
 describe("Kilo Gateway provider config", () => {
   describe("constants", () => {
@@ -29,11 +30,11 @@ describe("Kilo Gateway provider config", () => {
     });
 
     it("KILOCODE_DEFAULT_MODEL_REF includes provider prefix", () => {
-      expect(KILOCODE_DEFAULT_MODEL_REF).toBe("kilocode/anthropic/claude-opus-4.6");
+      expect(KILOCODE_DEFAULT_MODEL_REF).toBe("kilocode/kilo/auto");
     });
 
-    it("KILOCODE_DEFAULT_MODEL_ID is anthropic/claude-opus-4.6", () => {
-      expect(KILOCODE_DEFAULT_MODEL_ID).toBe("anthropic/claude-opus-4.6");
+    it("KILOCODE_DEFAULT_MODEL_ID is kilo/auto", () => {
+      expect(KILOCODE_DEFAULT_MODEL_ID).toBe("kilo/auto");
     });
   });
 
@@ -41,7 +42,7 @@ describe("Kilo Gateway provider config", () => {
     it("returns correct model shape", () => {
       const model = buildKilocodeModelDefinition();
       expect(model.id).toBe(KILOCODE_DEFAULT_MODEL_ID);
-      expect(model.name).toBe("Claude Opus 4.6");
+      expect(model.name).toBe("Kilo Auto");
       expect(model.reasoning).toBe(true);
       expect(model.input).toEqual(["text", "image"]);
       expect(model.contextWindow).toBe(KILOCODE_DEFAULT_CONTEXT_WINDOW);
@@ -66,6 +67,33 @@ describe("Kilo Gateway provider config", () => {
       expect(Array.isArray(models)).toBe(true);
       const modelIds = models?.map((m) => m.id) ?? [];
       expect(modelIds).toContain(KILOCODE_DEFAULT_MODEL_ID);
+    });
+
+    it("surfaces the full Kilo model catalog", () => {
+      const result = applyKilocodeProviderConfig(emptyCfg);
+      const provider = result.models?.providers?.kilocode;
+      const modelIds = provider?.models?.map((m) => m.id) ?? [];
+      for (const modelId of KILOCODE_MODEL_IDS) {
+        expect(modelIds).toContain(modelId);
+      }
+    });
+
+    it("appends missing catalog models to existing Kilo provider config", () => {
+      const result = applyKilocodeProviderConfig({
+        models: {
+          providers: {
+            kilocode: {
+              baseUrl: KILOCODE_BASE_URL,
+              api: "openai-completions",
+              models: [buildKilocodeModelDefinition()],
+            },
+          },
+        },
+      });
+      const modelIds = result.models?.providers?.kilocode?.models?.map((m) => m.id) ?? [];
+      for (const modelId of KILOCODE_MODEL_IDS) {
+        expect(modelIds).toContain(modelId);
+      }
     });
 
     it("sets Kilo Gateway alias in agent default models", () => {
@@ -122,7 +150,7 @@ describe("Kilo Gateway provider config", () => {
   describe("env var resolution", () => {
     it("resolves KILOCODE_API_KEY from env", () => {
       const envSnapshot = captureEnv(["KILOCODE_API_KEY"]);
-      process.env.KILOCODE_API_KEY = "test-kilo-key";
+      process.env.KILOCODE_API_KEY = "test-kilo-key"; // pragma: allowlist secret
 
       try {
         const result = resolveEnvApiKey("kilocode");
@@ -149,7 +177,7 @@ describe("Kilo Gateway provider config", () => {
     it("resolves the kilocode api key via resolveApiKeyForProvider", async () => {
       const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
       const envSnapshot = captureEnv(["KILOCODE_API_KEY"]);
-      process.env.KILOCODE_API_KEY = "kilo-provider-test-key";
+      process.env.KILOCODE_API_KEY = "kilo-provider-test-key"; // pragma: allowlist secret
 
       try {
         const auth = await resolveApiKeyForProvider({
