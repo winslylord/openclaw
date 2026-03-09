@@ -1,0 +1,49 @@
+---
+description: TypeScript coding conventions for OpenClaw
+globs: "**/*.ts,**/*.tsx"
+alwaysApply: false
+---
+
+# TypeScript Coding Conventions
+
+## Module System
+
+- ESM only (`"type": "module"` in package.json). Use `import`/`export`, never `require`.
+- Prefer Bun for TypeScript execution during development: `bun <file.ts>`.
+
+## Type Safety
+
+- Strict typing required. Never use `any` — fix root causes instead.
+- Never add `@ts-nocheck`. Do not disable `no-explicit-any` in oxlint config.
+- Patched dependencies must use exact versions (no `^`/`~`).
+
+## Code Style
+
+- Formatting and linting via **oxlint** and **oxfmt** (not ESLint/Prettier). Run `pnpm check` before commits.
+- Keep files under ~500-700 LOC. Split/refactor when it improves clarity.
+- Add brief comments only for tricky or non-obvious logic.
+- Use `createDefaultDeps` pattern for dependency injection.
+- CLI progress: use `src/cli/progress.ts` (osc-progress + @clack/prompts spinner). Don't hand-roll spinners.
+- Status output: use `src/terminal/table.ts` for ANSI-safe table wrapping.
+- Colors: use shared CLI palette in `src/terminal/palette.ts` — no hardcoded colors.
+
+## Class Design
+
+- Never share class behavior via prototype mutation. Use explicit inheritance/composition (`A extends B extends C`).
+- In tests, prefer per-instance stubs over `SomeClass.prototype.method = ...`.
+
+## Tool Schemas (google-antigravity)
+
+- Avoid `Type.Union` in tool input schemas; no `anyOf`/`oneOf`/`allOf`.
+- Use `stringEnum`/`optionalStringEnum` for string lists.
+- Use `Type.Optional(...)` instead of `... | null`.
+- Avoid raw `format` property names in tool schemas (reserved keyword conflicts).
+
+## Control UI (Lit)
+
+- Use **legacy** decorators (not standard `accessor` fields):
+  ```ts
+  @state() foo = "bar";
+  @property({ type: Number }) count = 0;
+  ```
+- `experimentalDecorators: true` and `useDefineForClassFields: false` are set in tsconfig.

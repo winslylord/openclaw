@@ -1,0 +1,44 @@
+---
+description: Swift coding conventions for macOS and iOS apps
+globs: "**/*.swift"
+alwaysApply: false
+---
+
+# Swift Conventions
+
+## State Management
+
+- Prefer the **Observation** framework (`@Observable`, `@Bindable`) over `ObservableObject`/`@StateObject`.
+- Don't introduce new `ObservableObject` unless required for compatibility.
+- Migrate existing `ObservableObject` usages when touching related code.
+
+## Tooling
+
+- **SwiftLint**: configured via `.swiftlint.yml`.
+- **SwiftFormat**: configured via `.swiftformat`.
+- Both are enforced in CI and pre-commit hooks.
+
+## App Locations
+
+| App | Path |
+|-----|------|
+| macOS | `apps/macos/` |
+| iOS | `apps/ios/` |
+| Shared | `apps/shared/` |
+
+## Build & Test
+
+- Mac packaging (dev): `scripts/package-mac-app.sh` (defaults to current arch).
+- Release checklist: `docs/platforms/mac/release.md`.
+- Do NOT rebuild the macOS app over SSH — must be run directly on the Mac.
+- Before testing on device, check for connected real devices (iOS + Android) and prefer them over simulators.
+
+## Version Locations
+
+When bumping versions, update all of these:
+- `apps/ios/Sources/Info.plist` + `apps/ios/Tests/Info.plist`
+- `apps/macos/Sources/OpenClaw/Resources/Info.plist`
+- `apps/android/app/build.gradle.kts`
+- `package.json` (CLI)
+
+Do NOT touch `appcast.xml` unless cutting a new macOS Sparkle release.

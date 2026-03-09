@@ -1,0 +1,48 @@
+---
+description: Testing conventions and Vitest patterns for OpenClaw
+globs: "**/*.test.ts,**/*.e2e.test.ts"
+alwaysApply: false
+---
+
+# Testing Conventions
+
+## Framework & Config
+
+- **Vitest** with V8 coverage. Thresholds: 70% lines/branches/functions/statements.
+- Config files: `vitest.unit.config.ts`, `vitest.e2e.config.ts`, `vitest.live.config.ts`.
+
+## Naming & Organization
+
+- Tests colocated with source: `foo.ts` → `foo.test.ts`.
+- E2E tests: `*.e2e.test.ts`.
+- Match source file names in test file names.
+
+## Running Tests
+
+```
+pnpm test              # Unit tests
+pnpm test:coverage     # With coverage report
+pnpm test:e2e          # E2E tests
+```
+
+For memory-constrained environments:
+```
+OPENCLAW_TEST_PROFILE=low OPENCLAW_TEST_SERIAL_GATEWAY=1 pnpm test
+```
+
+Do not set test workers above 16.
+
+## Live Tests (requires real API keys)
+
+```
+CLAWDBOT_LIVE_TEST=1 pnpm test:live       # OpenClaw-only live tests
+LIVE=1 pnpm test:live                      # Including provider live tests
+pnpm test:docker:live-models               # Docker live model tests
+pnpm test:docker:live-gateway              # Docker live gateway tests
+```
+
+## Test Style
+
+- Prefer per-instance stubs over prototype mutation.
+- Only document why prototype-level patching is required if truly needed.
+- Pure test additions/fixes generally do NOT need a changelog entry.

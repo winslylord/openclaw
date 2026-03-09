@@ -1,0 +1,44 @@
+---
+description: Git commit and PR workflow conventions
+alwaysApply: true
+---
+
+# Git & PR Workflow
+
+## Committing
+
+- Use `scripts/committer "<msg>" <file...>` to create commits — avoid manual `git add`/`git commit`.
+- Concise, action-oriented commit messages: `CLI: add verbose flag to send`.
+- Group related changes; avoid bundling unrelated refactors.
+
+## Multi-Agent Safety
+
+These rules are critical when multiple AI agents may be working on the repo:
+- Do NOT create/apply/drop `git stash` entries unless explicitly requested.
+- Do NOT create/remove/modify `git worktree` unless explicitly requested.
+- Do NOT switch branches unless explicitly requested.
+- On `push`: may `git pull --rebase` but never discard other agents' work.
+- On `commit`: scope to your changes only. On `commit all`: commit everything in grouped chunks.
+- When you see unrecognized files, keep going — focus on your changes.
+
+## PR Rules
+
+- One PR = one issue/topic. Do not mix unrelated concerns.
+- PRs over ~5,000 changed lines are reviewed only in exceptional circumstances.
+- PR submission template: `.github/pull_request_template.md`.
+- Mark AI-assisted PRs in title/description.
+
+## Pre-commit Hooks
+
+- Install: `prek install`
+- Runs: trailing-whitespace, detect-secrets, shellcheck, oxlint, oxfmt, swiftlint, swiftformat, ruff.
+- Lint/format churn: if diffs are formatting-only, auto-resolve without asking.
+
+## Changelog
+
+- User-facing changes only; no internal/meta notes.
+- Pure test additions/fixes do NOT need a changelog entry.
+
+## Shorthand: `sync`
+
+If working tree is dirty, commit all changes (sensible Conventional Commit message), then `git pull --rebase`; if rebase conflicts and cannot resolve, stop; otherwise `git push`.

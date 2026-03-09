@@ -1,0 +1,49 @@
+---
+description: OpenClaw project overview - tech stack, structure, key commands
+alwaysApply: true
+---
+
+# OpenClaw Project Overview
+
+OpenClaw is a multi-channel AI gateway and personal assistant supporting WhatsApp, Telegram, Slack, Discord, Signal, iMessage, and more.
+
+## Tech Stack
+
+- **Core**: TypeScript (ESM), Node.js ≥22.12.0, pnpm 10.x monorepo
+- **Build**: tsdown (bundling), tsgo (type-checking)
+- **Lint/Format**: oxlint + oxfmt (NOT ESLint/Prettier)
+- **Test**: Vitest with V8 coverage
+- **Native apps**: Swift (macOS/iOS), Kotlin (Android)
+- **Skills**: Python (Ruff + pytest)
+- **UI**: Lit web components (legacy decorators)
+
+## Key Directories
+
+| Path | Purpose |
+|------|---------|
+| `src/` | Core source (CLI, commands, channels, agents, config) |
+| `extensions/` | Channel plugins (telegram, discord, slack, matrix, etc.) |
+| `packages/` | Internal packages |
+| `ui/` | Web Control UI (Lit) |
+| `apps/` | Native apps (macos, ios, android) |
+| `docs/` | Mintlify-hosted documentation |
+| `skills/` | Python skill scripts |
+| `scripts/` | Build, test, CI scripts |
+
+## Essential Commands
+
+```
+pnpm install        # Install dependencies
+pnpm build          # Build dist (tsdown + tsgo)
+pnpm check          # Format + typecheck + lint
+pnpm test           # Unit tests (Vitest)
+pnpm test:e2e       # E2E tests
+pnpm gateway:watch  # Dev mode with hot reload
+pnpm format:fix     # Auto-fix formatting (oxfmt)
+```
+
+## Personal Fork Notes
+
+This is a private fork. When contributing upstream, keep PRs focused (one topic per PR). Code comments in English to stay consistent with upstream.
+
+Interested areas: local LLM integration, ComfyUI extension development.

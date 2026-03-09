@@ -1,0 +1,41 @@
+---
+description: Plugin and extension development conventions
+globs: "extensions/**"
+alwaysApply: false
+---
+
+# Extension / Plugin Development
+
+## Structure
+
+Extensions live under `extensions/*` as workspace packages in the pnpm monorepo.
+
+## Dependency Rules
+
+- Keep plugin-only deps in the extension's own `package.json`, NOT root `package.json`.
+- Runtime deps must be in `dependencies` (install runs `npm install --omit=dev`).
+- Avoid `workspace:*` in `dependencies` — it breaks npm install.
+- Put `openclaw` in `devDependencies` or `peerDependencies` (runtime resolves via jiti alias).
+- Any patched dependency (`pnpm.patchedDependencies`) must use exact versions.
+- Patching dependencies requires explicit approval.
+
+## Channel Extensions
+
+When adding/modifying channel extensions:
+- Consider ALL built-in + extension channels when refactoring shared logic (routing, allowlists, pairing, command gating, onboarding, docs).
+- Update `.github/labeler.yml` and create matching GitHub labels.
+- Update every UI surface and docs (macOS app, web UI, mobile, onboarding/overview docs).
+
+## Plugin Distribution
+
+- Preferred path: npm package distribution + local extension loading for dev.
+- New skills should be published to ClawHub first, not added to core.
+- The bar for adding optional plugins to core is intentionally high.
+- Plugin docs: `docs/tools/plugin.md`.
+
+## Local LLM & ComfyUI Notes
+
+When developing extensions for local language models or ComfyUI integration:
+- Follow the same extension structure under `extensions/`.
+- Keep external service dependencies optional and well-documented.
+- Consider offline/local-first operation patterns.
