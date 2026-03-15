@@ -20,7 +20,9 @@ Usage:
 import argparse
 import json
 import os
+import platform
 import random
+import subprocess
 import sys
 import time
 import uuid
@@ -31,9 +33,12 @@ import requests
 
 
 DEFAULT_COMFYUI_URL = "http://127.0.0.1:8000"
+DEFAULT_COMFYUI_EXE = r"C:\Users\winsl\AppData\Local\Programs\ComfyUI\ComfyUI.exe"
 REQUEST_TIMEOUT = 30
 POLL_START_INTERVAL = 0.5
 POLL_MAX_INTERVAL = 3.0
+SERVER_STARTUP_TIMEOUT = 120
+SERVER_STARTUP_POLL_INTERVAL = 2.0
 
 
 def get_comfyui_url(provided: str | None) -> str:
@@ -42,12 +47,82 @@ def get_comfyui_url(provided: str | None) -> str:
     return os.environ.get("COMFYUI_URL", DEFAULT_COMFYUI_URL).rstrip("/")
 
 
+def get_comfyui_exe(provided: str | None) -> str | None:
+    if provided:
+        return provided
+    from_env = os.environ.get("COMFYUI_EXE")
+    if from_env:
+        return from_env
+    if platform.system() == "Windows" and Path(DEFAULT_COMFYUI_EXE).exists():
+        return DEFAULT_COMFYUI_EXE
+    return None
+
+
 def check_server(base_url: str) -> bool:
     try:
         r = requests.get(f"{base_url}/system_stats", timeout=5)
         return r.status_code == 200
     except Exception:
         return False
+
+
+def start_comfyui_server(exe_path: str, base_url: str) -> bool:
+    """Launch ComfyUI as a detached background process and wait until it's ready."""
+    exe = Path(exe_path)
+    if not exe.exists():
+        print(f"Error: ComfyUI executable not found at {exe_path}", file=sys.stderr)
+        return False
+
+    print(f"Starting ComfyUI: {exe_path}")
+
+    if platform.system() == "Windows":
+        CREATE_NEW_PROCESS_GROUP = 0x00000200
+        DETACHED_PROCESS = 0x00000008
+        subprocess.Popen(
+            [str(exe)],
+            cwd=str(exe.parent),
+            creationflags=CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    else:
+        subprocess.Popen(
+            [str(exe)],
+            cwd=str(exe.parent),
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+    print(f"Waiting for ComfyUI to become ready (up to {SERVER_STARTUP_TIMEOUT}s)...")
+    deadline = time.time() + SERVER_STARTUP_TIMEOUT
+    while time.time() < deadline:
+        if check_server(base_url):
+            print("ComfyUI is ready.")
+            return True
+        time.sleep(SERVER_STARTUP_POLL_INTERVAL)
+
+    print(f"Error: ComfyUI did not become ready within {SERVER_STARTUP_TIMEOUT}s", file=sys.stderr)
+    return False
+
+
+def ensure_server(base_url: str, exe_path: str | None, auto_start: bool) -> bool:
+    """Check server health; auto-start if configured and not running."""
+    if check_server(base_url):
+        return True
+
+    if not auto_start:
+        print(f"Error: ComfyUI server is not reachable at {base_url}", file=sys.stderr)
+        print("Please start ComfyUI first, or use --auto-start to launch it automatically.", file=sys.stderr)
+        return False
+
+    if not exe_path:
+        print(f"Error: ComfyUI server is not reachable at {base_url}", file=sys.stderr)
+        print("Auto-start requested but no executable path found.", file=sys.stderr)
+        print("Set --comfyui-exe or COMFYUI_EXE environment variable.", file=sys.stderr)
+        return False
+
+    return start_comfyui_server(exe_path, base_url)
 
 
 def query_node_options(base_url: str, node_class: str) -> dict | None:
@@ -70,6 +145,30 @@ def get_model_list(base_url: str, node_class: str, field: str) -> list[str]:
         return []
 
 
+CLIP_TYPE_HINTS: list[tuple[str, str]] = [
+    ("qwen", "qwen_image"),
+    ("hunyuan", "hunyuan_image"),
+    ("flux", "flux2"),
+    ("sd3", "sd3"),
+    ("pixart", "pixart"),
+    ("lumina", "lumina2"),
+    ("wan", "wan"),
+    ("hidream", "hidream"),
+    ("chroma", "chroma"),
+    ("omnigen", "omnigen2"),
+    ("longcat", "longcat_image"),
+]
+
+
+def guess_clip_type(clip_name: str, unet_name: str) -> str:
+    """Guess the CLIPLoader type from model filenames."""
+    combined = (clip_name + " " + unet_name).lower()
+    for keyword, clip_type in CLIP_TYPE_HINTS:
+        if keyword in combined:
+            return clip_type
+    return "flux2"
+
+
 def build_flux_workflow(
     prompt: str,
     negative: str,
@@ -83,6 +182,7 @@ def build_flux_workflow(
     cfg: float,
     sampler: str,
     scheduler: str,
+    clip_type: str = "flux2",
 ) -> dict:
     """Flux-style workflow: separate UNETLoader + CLIPLoader + VAELoader."""
     return {
@@ -92,7 +192,7 @@ def build_flux_workflow(
         },
         "11": {
             "class_type": "CLIPLoader",
-            "inputs": {"clip_name": clip, "type": "flux2"},
+            "inputs": {"clip_name": clip, "type": clip_type},
         },
         "12": {
             "class_type": "VAELoader",
@@ -303,6 +403,11 @@ def download_outputs(base_url: str, history_entry: dict, output_dir: Path, filen
 
 
 def main():
+    # Force line-buffered stdout/stderr so output appears in real-time
+    # when run as a subprocess (non-TTY), e.g. via OpenClaw's exec tool
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+
     parser = argparse.ArgumentParser(description="Generate images via local ComfyUI")
     parser.add_argument("--prompt", "-p", required=True, help="Positive prompt text")
     parser.add_argument("--filename", "-f", required=True, help="Output filename")
@@ -313,6 +418,8 @@ def main():
     parser.add_argument("--unet", default=None, help="UNET/diffusion model filename (Flux mode)")
     parser.add_argument("--clip", default=None, help="CLIP model filename (Flux mode)")
     parser.add_argument("--vae", default=None, help="VAE model filename (Flux mode)")
+    parser.add_argument("--clip-type", default=None,
+                        help="CLIP type for CLIPLoader (e.g. flux2, qwen_image, sd3). Auto-detected from clip name if omitted.")
     parser.add_argument("--workflow", "-w", default=None, help="Path to ComfyUI API-format workflow JSON")
     parser.add_argument("--url", default=None, help="ComfyUI server URL")
     parser.add_argument("--seed", "-s", type=int, default=None, help="RNG seed")
@@ -322,13 +429,16 @@ def main():
     parser.add_argument("--scheduler", default="normal", help="Scheduler name")
     parser.add_argument("--timeout", type=int, default=300, help="Max wait seconds")
     parser.add_argument("--list-models", action="store_true", help="List available models and exit")
+    parser.add_argument("--auto-start", action="store_true", default=None,
+                        help="Auto-start ComfyUI if not running (default: true when exe is found)")
+    parser.add_argument("--comfyui-exe", default=None, help="Path to ComfyUI executable")
 
     args = parser.parse_args()
     base_url = get_comfyui_url(args.url)
+    exe_path = get_comfyui_exe(args.comfyui_exe)
+    auto_start = args.auto_start if args.auto_start is not None else (exe_path is not None)
 
-    if not check_server(base_url):
-        print(f"Error: ComfyUI server is not reachable at {base_url}", file=sys.stderr)
-        print("Please start ComfyUI first.", file=sys.stderr)
+    if not ensure_server(base_url, exe_path, auto_start):
         sys.exit(1)
 
     checkpoints = get_model_list(base_url, "CheckpointLoaderSimple", "ckpt_name")
@@ -377,9 +487,10 @@ def main():
         if not clip or not vae:
             print("Error: Flux mode requires CLIP and VAE models.", file=sys.stderr)
             sys.exit(1)
+        clip_type = args.clip_type or guess_clip_type(clip, unet)
         print(f"Mode: Flux (UNET + CLIP + VAE)")
         print(f"UNET: {unet}")
-        print(f"CLIP: {clip}")
+        print(f"CLIP: {clip} (type={clip_type})")
         print(f"VAE:  {vae}")
         workflow = build_flux_workflow(
             prompt=args.prompt, negative=args.negative,
@@ -387,6 +498,7 @@ def main():
             unet=unet, clip=clip, vae=vae, seed=seed,
             steps=args.steps, cfg=args.cfg,
             sampler=args.sampler, scheduler=args.scheduler,
+            clip_type=clip_type,
         )
 
     else:
@@ -415,7 +527,12 @@ def main():
         sys.exit(1)
 
     output_path = Path(args.filename)
-    output_dir = output_path.parent if str(output_path.parent) != "." else Path.cwd()
+    if str(output_path.parent) == ".":
+        media_dir = Path.home() / ".openclaw" / "media"
+        media_dir.mkdir(parents=True, exist_ok=True)
+        output_dir = media_dir
+    else:
+        output_dir = output_path.parent
 
     saved = download_outputs(base_url, history_entry, output_dir, output_path.name)
 

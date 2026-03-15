@@ -262,7 +262,7 @@ export async function installScheduledTask({
   }
   if (create.code !== 0) {
     const detail = create.stderr || create.stdout;
-    const hint = /access is denied/i.test(detail)
+    const hint = /access is denied|拒绝访问|アクセスが拒否|액세스가 거부/i.test(detail)
       ? " Run PowerShell as Administrator or rerun without installing the daemon."
       : "";
     throw new Error(`schtasks create failed: ${detail}${hint}`.trim());
@@ -299,8 +299,8 @@ export async function uninstallScheduledTask({
 }
 
 function isTaskNotRunning(res: { stdout: string; stderr: string; code: number }): boolean {
-  const detail = (res.stderr || res.stdout).toLowerCase();
-  return detail.includes("not running");
+  const detail = res.stderr || res.stdout;
+  return detail.toLowerCase().includes("not running") || detail.includes("没有运行");
 }
 
 export async function stopScheduledTask({ stdout, env }: GatewayServiceControlArgs): Promise<void> {
@@ -349,7 +349,9 @@ export async function readScheduledTaskRuntime(
   const res = await execSchtasks(["/Query", "/TN", taskName, "/V", "/FO", "LIST"]);
   if (res.code !== 0) {
     const detail = (res.stderr || res.stdout).trim();
-    const missing = detail.toLowerCase().includes("cannot find the file");
+    const lowerDetail = detail.toLowerCase();
+    const missing =
+      lowerDetail.includes("cannot find the file") || detail.includes("找不到指定的文件");
     return {
       status: missing ? "stopped" : "unknown",
       detail: detail || undefined,
